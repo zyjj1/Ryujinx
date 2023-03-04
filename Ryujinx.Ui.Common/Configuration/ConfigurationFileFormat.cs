@@ -14,7 +14,7 @@ namespace Ryujinx.Ui.Common.Configuration
         /// <summary>
         /// The current version of the file format
         /// </summary>
-        public const int CurrentVersion = 39;
+        public const int CurrentVersion = 44;
 
         /// <summary>
         /// Version of the configuration file format
@@ -50,6 +50,21 @@ namespace Ryujinx.Ui.Common.Configuration
         /// Aspect Ratio applied to the renderer window.
         /// </summary>
         public AspectRatio AspectRatio { get; set; }
+
+        /// <summary>
+        /// Applies anti-aliasing to the renderer.
+        /// </summary>
+        public AntiAliasing AntiAliasing { get; set; }
+
+        /// <summary>
+        /// Sets the framebuffer upscaling type.
+        /// </summary>
+        public ScalingFilter ScalingFilter { get; set; }
+
+        /// <summary>
+        /// Sets the framebuffer upscaling level.
+        /// </summary>
+        public int ScalingFilterLevel { get; set; }
 
         /// <summary>
         /// Dumps shaders in this local directory
@@ -162,6 +177,16 @@ namespace Ryujinx.Ui.Common.Configuration
         public bool EnableShaderCache { get; set; }
 
         /// <summary>
+        /// Enables or disables texture recompression
+        /// </summary>
+        public bool EnableTextureRecompression { get; set; }
+
+        /// <summary>
+        /// Enables or disables Macro high-level emulation
+        /// </summary>
+        public bool EnableMacroHLE { get; set; }
+
+        /// <summary>
         /// Enables or disables profiled translation cache persistency
         /// </summary>
         public bool EnablePtc { get; set; }
@@ -197,7 +222,7 @@ namespace Ryujinx.Ui.Common.Configuration
         public MemoryManagerMode MemoryManagerMode { get; set; }
 
         /// <summary>
-        /// Expands the RAM amount on the emulated system from 4GB to 6GB
+        /// Expands the RAM amount on the emulated system from 4GiB to 6GiB
         /// </summary>
         public bool ExpandRam { get; set; }
 
@@ -311,6 +336,21 @@ namespace Ryujinx.Ui.Common.Configuration
         public List<InputConfig> InputConfig { get; set; }
 
         /// <summary>
+        /// Graphics backend
+        /// </summary>
+        public GraphicsBackend GraphicsBackend { get; set; }
+
+        /// <summary>
+        /// Preferred GPU
+        /// </summary>
+        public string PreferredGpu { get; set; }
+
+        /// <summary>
+        /// Uses Hypervisor over JIT if available
+        /// </summary>
+        public bool UseHypervisor { get; set; }
+
+        /// <summary>
         /// Loads a configuration file from disk
         /// </summary>
         /// <param name="path">The path to the JSON configuration file</param>
@@ -320,7 +360,7 @@ namespace Ryujinx.Ui.Common.Configuration
             {
                 configurationFileFormat = JsonHelper.DeserializeFromFile<ConfigurationFileFormat>(path);
 
-                return true;
+                return configurationFileFormat.Version != 0;
             }
             catch
             {

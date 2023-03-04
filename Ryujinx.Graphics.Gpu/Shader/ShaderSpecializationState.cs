@@ -1,4 +1,5 @@
 using Ryujinx.Common.Memory;
+using Ryujinx.Graphics.GAL;
 using Ryujinx.Graphics.Gpu.Image;
 using Ryujinx.Graphics.Gpu.Memory;
 using Ryujinx.Graphics.Gpu.Shader.DiskCache;
@@ -19,6 +20,7 @@ namespace Ryujinx.Graphics.Gpu.Shader
         private const uint TfbdMagic = (byte)'T' | ((byte)'F' << 8) | ((byte)'B' << 16) | ((byte)'D' << 24);
         private const uint TexkMagic = (byte)'T' | ((byte)'E' << 8) | ((byte)'X' << 16) | ((byte)'K' << 24);
         private const uint TexsMagic = (byte)'T' | ((byte)'E' << 8) | ((byte)'X' << 16) | ((byte)'S' << 24);
+        private const uint PgpsMagic = (byte)'P' | ((byte)'G' << 8) | ((byte)'P' << 16) | ((byte)'S' << 24);
 
         /// <summary>
         /// Flags indicating GPU state that is used by the shader.
@@ -50,6 +52,11 @@ namespace Ryujinx.Graphics.Gpu.Shader
         /// Contant buffers bound at the time the shader was compiled, per stage.
         /// </summary>
         public Array5<uint> ConstantBufferUse;
+
+        /// <summary>
+        /// Pipeline state captured at the time of shader use.
+        /// </summary>
+        public ProgramPipelineState? PipelineState;
 
         /// <summary>
         /// Transform feedback buffers active at the time the shader was compiled.
@@ -103,7 +110,7 @@ namespace Ryujinx.Graphics.Gpu.Shader
             /// <summary>
             /// Texture target.
             /// </summary>
-            public Image.TextureTarget TextureTarget;
+            public TextureTarget TextureTarget;
 
             /// <summary>
             /// Indicates if the coordinates used to sample the texture are normalized or not (0.0..1.0 or 0..Width/Height).
@@ -114,7 +121,7 @@ namespace Ryujinx.Graphics.Gpu.Shader
         /// <summary>
         /// Texture binding information, used to identify each texture accessed by the shader.
         /// </summary>
-        private struct TextureKey : IEquatable<TextureKey>
+        private readonly record struct TextureKey
         {
             // New fields should be added to the end of the struct to keep disk shader cache compatibility.
 
@@ -145,21 +152,6 @@ namespace Ryujinx.Graphics.Gpu.Shader
                 Handle = handle;
                 CbufSlot = cbufSlot;
             }
-
-            public override bool Equals(object obj)
-            {
-                return obj is TextureKey textureKey && Equals(textureKey);
-            }
-
-            public bool Equals(TextureKey other)
-            {
-                return StageIndex == other.StageIndex && Handle == other.Handle && CbufSlot == other.CbufSlot;
-            }
-
-            public override int GetHashCode()
-            {
-                return HashCode.Combine(StageIndex, Handle, CbufSlot);
-            }
         }
 
         private readonly Dictionary<TextureKey, Box<TextureSpecializationState>> _textureSpecialization;
@@ -179,7 +171,7 @@ namespace Ryujinx.Graphics.Gpu.Shader
         /// Creates a new instance of the shader specialization state.
         /// </summary>
         /// <param name="state">Current compute engine state</param>
-        public ShaderSpecializationState(GpuChannelComputeState state) : this()
+        public ShaderSpecializationState(ref GpuChannelComputeState state) : this()
         {
             ComputeState = state;
             _compute = true;
@@ -190,7 +182,7 @@ namespace Ryujinx.Graphics.Gpu.Shader
         /// </summary>
         /// <param name="state">Current 3D engine state</param>
         /// <param name="descriptors">Optional transform feedback buffers in use, if any</param>
-        public ShaderSpecializationState(GpuChannelGraphicsState state, TransformFeedbackDescriptor[] descriptors) : this()
+        private ShaderSpecializationState(ref GpuChannelGraphicsState state, TransformFeedbackDescriptor[] descriptors) : this()
         {
             GraphicsState = state;
             _compute = false;
@@ -242,6 +234,34 @@ namespace Ryujinx.Graphics.Gpu.Shader
                     _imageByBinding[i] = imageBindings;
                 }
             }
+        }
+
+        /// <summary>
+        /// Creates a new instance of the shader specialization state.
+        /// </summary>
+        /// <param name="state">Current 3D engine state</param>
+        /// <param name="pipelineState">Current program pipeline state</param>
+        /// <param name="descriptors">Optional transform feedback buffers in use, if any</param>
+        public ShaderSpecializationState(
+            ref GpuChannelGraphicsState state,
+            ref ProgramPipelineState pipelineState,
+            TransformFeedbackDescriptor[] descriptors) : this(ref state, descriptors)
+        {
+            PipelineState = pipelineState;
+        }
+
+        /// <summary>
+        /// Creates a new instance of the shader specialization state.
+        /// </summary>
+        /// <param name="state">Current 3D engine state</param>
+        /// <param name="pipelineState">Current program pipeline state</param>
+        /// <param name="descriptors">Optional transform feedback buffers in use, if any</param>
+        public ShaderSpecializationState(
+            ref GpuChannelGraphicsState state,
+            ProgramPipelineState? pipelineState,
+            TransformFeedbackDescriptor[] descriptors) : this(ref state, descriptors)
+        {
+            PipelineState = pipelineState;
         }
 
         /// <summary>
@@ -311,7 +331,7 @@ namespace Ryujinx.Graphics.Gpu.Shader
             int cbufSlot,
             uint format,
             bool formatSrgb,
-            Image.TextureTarget target,
+            TextureTarget target,
             bool coordNormalized)
         {
             Box<TextureSpecializationState> state = GetOrCreateTextureSpecState(stageIndex, handle, cbufSlot);
@@ -358,6 +378,15 @@ namespace Ryujinx.Graphics.Gpu.Shader
         }
 
         /// <summary>
+        /// Checks if primitive topology was queried by the shader.
+        /// </summary>
+        /// <returns>True if queried, false otherwise</returns>
+        public bool IsPrimitiveTopologyQueried()
+        {
+            return _queriedState.HasFlag(QueriedStateFlags.PrimitiveTopology);
+        }
+
+        /// <summary>
         /// Checks if a given texture was registerd on this specialization state.
         /// </summary>
         /// <param name="stageIndex">Shader stage where the texture is used</param>
@@ -386,7 +415,7 @@ namespace Ryujinx.Graphics.Gpu.Shader
         /// <param name="stageIndex">Shader stage where the texture is used</param>
         /// <param name="handle">Offset in words of the texture handle on the texture buffer</param>
         /// <param name="cbufSlot">Slot of the texture buffer constant buffer</param>
-        public Image.TextureTarget GetTextureTarget(int stageIndex, int handle, int cbufSlot)
+        public TextureTarget GetTextureTarget(int stageIndex, int handle, int cbufSlot)
         {
             return GetTextureSpecState(stageIndex, handle, cbufSlot).Value.TextureTarget;
         }
@@ -446,9 +475,15 @@ namespace Ryujinx.Graphics.Gpu.Shader
         /// <param name="channel">GPU channel</param>
         /// <param name="poolState">Texture pool state</param>
         /// <param name="graphicsState">Graphics state</param>
+        /// <param name="usesDrawParameters">Indicates whether the vertex shader accesses draw parameters</param>
         /// <param name="checkTextures">Indicates whether texture descriptors should be checked</param>
         /// <returns>True if the state matches, false otherwise</returns>
-        public bool MatchesGraphics(GpuChannel channel, GpuChannelPoolState poolState, GpuChannelGraphicsState graphicsState, bool checkTextures)
+        public bool MatchesGraphics(
+            GpuChannel channel,
+            ref GpuChannelPoolState poolState,
+            ref GpuChannelGraphicsState graphicsState,
+            bool usesDrawParameters,
+            bool checkTextures)
         {
             if (graphicsState.ViewportTransformDisable != GraphicsState.ViewportTransformDisable)
             {
@@ -463,7 +498,44 @@ namespace Ryujinx.Graphics.Gpu.Shader
                 return false;
             }
 
-            return Matches(channel, poolState, checkTextures, isCompute: false);
+            if (graphicsState.DepthMode != GraphicsState.DepthMode)
+            {
+                return false;
+            }
+
+            if (graphicsState.AlphaTestEnable != GraphicsState.AlphaTestEnable)
+            {
+                return false;
+            }
+
+            if (graphicsState.AlphaTestEnable &&
+                (graphicsState.AlphaTestCompare != GraphicsState.AlphaTestCompare ||
+                graphicsState.AlphaTestReference != GraphicsState.AlphaTestReference))
+            {
+                return false;
+            }
+
+            if (!graphicsState.AttributeTypes.AsSpan().SequenceEqual(GraphicsState.AttributeTypes.AsSpan()))
+            {
+                return false;
+            }
+
+            if (usesDrawParameters && graphicsState.HasConstantBufferDrawParameters != GraphicsState.HasConstantBufferDrawParameters)
+            {
+                return false;
+            }
+
+            if (graphicsState.HasUnalignedStorageBuffer != GraphicsState.HasUnalignedStorageBuffer)
+            {
+                return false;
+            }
+
+            if (channel.Capabilities.NeedsFragmentOutputSpecialization && !graphicsState.FragmentOutputTypes.AsSpan().SequenceEqual(GraphicsState.FragmentOutputTypes.AsSpan()))
+            {
+                return false;
+            }
+
+            return Matches(channel, ref poolState, checkTextures, isCompute: false);
         }
 
         /// <summary>
@@ -471,11 +543,17 @@ namespace Ryujinx.Graphics.Gpu.Shader
         /// </summary>
         /// <param name="channel">GPU channel</param>
         /// <param name="poolState">Texture pool state</param>
+        /// <param name="computeState">Compute state</param>
         /// <param name="checkTextures">Indicates whether texture descriptors should be checked</param>
         /// <returns>True if the state matches, false otherwise</returns>
-        public bool MatchesCompute(GpuChannel channel, GpuChannelPoolState poolState, bool checkTextures)
+        public bool MatchesCompute(GpuChannel channel, ref GpuChannelPoolState poolState, GpuChannelComputeState computeState, bool checkTextures)
         {
-            return Matches(channel, poolState, checkTextures, isCompute: true);
+            if (computeState.HasUnalignedStorageBuffer != ComputeState.HasUnalignedStorageBuffer)
+            {
+                return false;
+            }
+
+            return Matches(channel, ref poolState, checkTextures, isCompute: true);
         }
 
         /// <summary>
@@ -495,11 +573,11 @@ namespace Ryujinx.Graphics.Gpu.Shader
         private static void UpdateCachedBuffer(
             GpuChannel channel,
             bool isCompute,
-            ref int cachedTextureBufferIndex,
-            ref int cachedSamplerBufferIndex,
-            ref ReadOnlySpan<int> cachedTextureBuffer,
-            ref ReadOnlySpan<int> cachedSamplerBuffer,
-            ref int cachedStageIndex,
+            scoped ref int cachedTextureBufferIndex,
+            scoped ref int cachedSamplerBufferIndex,
+            scoped ref ReadOnlySpan<int> cachedTextureBuffer,
+            scoped ref ReadOnlySpan<int> cachedSamplerBuffer,
+            scoped ref int cachedStageIndex,
             int textureBufferIndex,
             int samplerBufferIndex,
             int stageIndex)
@@ -539,7 +617,7 @@ namespace Ryujinx.Graphics.Gpu.Shader
         /// <param name="checkTextures">Indicates whether texture descriptors should be checked</param>
         /// <param name="isCompute">Indicates whenever the check is requested by the 3D or compute engine</param>
         /// <returns>True if the state matches, false otherwise</returns>
-        private bool Matches(GpuChannel channel, GpuChannelPoolState poolState, bool checkTextures, bool isCompute)
+        private bool Matches(GpuChannel channel, ref GpuChannelPoolState poolState, bool checkTextures, bool isCompute)
         {
             int constantBufferUsePerStageMask = _constantBufferUsePerStage;
 
@@ -685,6 +763,17 @@ namespace Ryujinx.Graphics.Gpu.Shader
                 constantBufferUsePerStageMask &= ~(1 << index);
             }
 
+            bool hasPipelineState = false;
+
+            dataReader.Read(ref hasPipelineState);
+
+            if (hasPipelineState)
+            {
+                ProgramPipelineState pipelineState = default;
+                dataReader.ReadWithMagicAndSize(ref pipelineState, PgpsMagic);
+                specState.PipelineState = pipelineState;
+            }
+
             if (specState._queriedState.HasFlag(QueriedStateFlags.TransformFeedback))
             {
                 ushort tfCount = 0;
@@ -741,6 +830,16 @@ namespace Ryujinx.Graphics.Gpu.Shader
                 int index = BitOperations.TrailingZeroCount(constantBufferUsePerStageMask);
                 dataWriter.Write(ref ConstantBufferUse[index]);
                 constantBufferUsePerStageMask &= ~(1 << index);
+            }
+
+            bool hasPipelineState = PipelineState.HasValue;
+
+            dataWriter.Write(ref hasPipelineState);
+
+            if (hasPipelineState)
+            {
+                ProgramPipelineState pipelineState = PipelineState.Value;
+                dataWriter.WriteWithMagicAndSize(ref pipelineState, PgpsMagic);
             }
 
             if (_queriedState.HasFlag(QueriedStateFlags.TransformFeedback))

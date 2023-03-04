@@ -111,11 +111,11 @@ namespace Ryujinx.HLE.HOS.Services.Fs.FileSystemProxy
             ref readonly Path name = ref FileSystemProxyHelper.GetSfPath(context);
             using var file = new SharedRef<LibHac.FsSrv.Sf.IFile>();
 
-            Result result = _fileSystem.Get.OpenFile(ref file.Ref(), in name, mode);
+            Result result = _fileSystem.Get.OpenFile(ref file.Ref, in name, mode);
 
             if (result.IsSuccess())
             {
-                IFile fileInterface = new IFile(ref file.Ref());
+                IFile fileInterface = new IFile(ref file.Ref);
 
                 MakeObject(context, fileInterface);
             }
@@ -132,11 +132,11 @@ namespace Ryujinx.HLE.HOS.Services.Fs.FileSystemProxy
             ref readonly Path name = ref FileSystemProxyHelper.GetSfPath(context);
             using var dir = new SharedRef<LibHac.FsSrv.Sf.IDirectory>();
 
-            Result result = _fileSystem.Get.OpenDirectory(ref dir.Ref(), name, mode);
+            Result result = _fileSystem.Get.OpenDirectory(ref dir.Ref, name, mode);
 
             if (result.IsSuccess())
             {
-                IDirectory dirInterface = new IDirectory(ref dir.Ref());
+                IDirectory dirInterface = new IDirectory(ref dir.Ref);
 
                 MakeObject(context, dirInterface);
             }
@@ -197,13 +197,7 @@ namespace Ryujinx.HLE.HOS.Services.Fs.FileSystemProxy
             context.ResponseData.Write(timestamp.Created);
             context.ResponseData.Write(timestamp.Modified);
             context.ResponseData.Write(timestamp.Accessed);
-
-            byte[] data = new byte[8];
-
-            // is valid?
-            data[0] = 1;
-
-            context.ResponseData.Write(data);
+            context.ResponseData.Write(1L); // Is valid?
 
             return (ResultCode)result.Value;
         }

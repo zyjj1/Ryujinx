@@ -1,6 +1,6 @@
-﻿using System;
+﻿using Ryujinx.Common.Memory;
+using System;
 using System.Buffers.Binary;
-using Ryujinx.Common.Memory;
 
 namespace Ryujinx.Graphics.Nvdec.Vp9.Dsp
 {
@@ -50,7 +50,7 @@ namespace Ryujinx.Graphics.Nvdec.Vp9.Dsp
 
         private void Fill()
         {
-            ReadOnlySpan<byte> buffer = _buffer.ToSpan();
+            ReadOnlySpan<byte> buffer = _buffer.AsSpan();
             ReadOnlySpan<byte> bufferStart = buffer;
             ulong value = Value;
             int count = Count;

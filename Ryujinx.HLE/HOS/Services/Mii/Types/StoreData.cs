@@ -1,11 +1,10 @@
-﻿using LibHac.Common;
-using Ryujinx.HLE.Utilities;
+﻿using Ryujinx.Common.Utilities;
 using System;
 using System.Runtime.InteropServices;
 
 namespace Ryujinx.HLE.HOS.Services.Mii.Types
 {
-    [StructLayout(LayoutKind.Sequential, Pack = 4, Size = Size)]
+    [StructLayout(LayoutKind.Sequential, Pack = 1, Size = Size)]
     struct StoreData : IStoredData<StoreData>
     {
         public const int Size = 0x44;
@@ -77,7 +76,7 @@ namespace Ryujinx.HLE.HOS.Services.Mii.Types
 
         private ReadOnlySpan<byte> AsSpan()
         {
-            return MemoryMarshal.AsBytes(SpanHelpers.CreateReadOnlySpan(in this, 1));
+            return SpanHelpers.AsReadOnlyByteSpan(ref this);
         }
 
         private ReadOnlySpan<byte> AsSpanWithoutDeviceCrc()

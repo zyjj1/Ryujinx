@@ -133,14 +133,14 @@ namespace Ryujinx.HLE.HOS.Services.Ssl
 
                     using var trustedCertsFileRef = new UniqueRef<IFile>();
 
-                    Result result = romfs.OpenFile(ref trustedCertsFileRef.Ref(), "/ssl_TrustedCerts.bdf".ToU8Span(), OpenMode.Read);
+                    Result result = romfs.OpenFile(ref trustedCertsFileRef.Ref, "/ssl_TrustedCerts.bdf".ToU8Span(), OpenMode.Read);
 
                     if (!result.IsSuccess())
                     {
                         // [1.0.0 - 2.3.0]
                         if (ResultFs.PathNotFound.Includes(result))
                         {
-                            result = romfs.OpenFile(ref trustedCertsFileRef.Ref(), "/ssl_TrustedCerts.tcf".ToU8Span(), OpenMode.Read);
+                            result = romfs.OpenFile(ref trustedCertsFileRef.Ref, "/ssl_TrustedCerts.tcf".ToU8Span(), OpenMode.Read);
                         }
 
                         if (result.IsFailure())
@@ -181,7 +181,11 @@ namespace Ryujinx.HLE.HOS.Services.Ssl
             }
         }
 
-        public bool TryGetCertificates(ReadOnlySpan<CaCertificateId> ids, out CertStoreEntry[] entries)
+        public bool TryGetCertificates(
+            ReadOnlySpan<CaCertificateId> ids,
+            out CertStoreEntry[] entries,
+            out bool hasAllCertificates,
+            out int requiredSize)
         {
             lock (_lock)
             {
@@ -190,7 +194,8 @@ namespace Ryujinx.HLE.HOS.Services.Ssl
                     throw new InvalidSystemResourceException(CertStoreTitleMissingErrorMessage);
                 }
 
-                bool hasAllCertificates = false;
+                requiredSize = 0;
+                hasAllCertificates = false;
 
                 foreach (CaCertificateId id in ids)
                 {
@@ -205,12 +210,14 @@ namespace Ryujinx.HLE.HOS.Services.Ssl
                 if (hasAllCertificates)
                 {
                     entries = new CertStoreEntry[_certificates.Count];
+                    requiredSize = (_certificates.Count + 1) * Unsafe.SizeOf<BuiltInCertificateInfo>();
 
                     int i = 0;
 
                     foreach (CertStoreEntry entry in _certificates.Values)
                     {
                         entries[i++] = entry;
+                        requiredSize += (entry.Data.Length + 3) & ~3;
                     }
 
                     return true;
@@ -218,6 +225,7 @@ namespace Ryujinx.HLE.HOS.Services.Ssl
                 else
                 {
                     entries = new CertStoreEntry[ids.Length];
+                    requiredSize = ids.Length * Unsafe.SizeOf<BuiltInCertificateInfo>();
 
                     for (int i = 0; i < ids.Length; i++)
                     {
@@ -227,6 +235,7 @@ namespace Ryujinx.HLE.HOS.Services.Ssl
                         }
 
                         entries[i] = entry;
+                        requiredSize += (entry.Data.Length + 3) & ~3;
                     }
 
                     return true;

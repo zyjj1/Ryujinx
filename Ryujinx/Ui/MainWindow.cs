@@ -1,12 +1,11 @@
 ﻿using ARMeilleure.Translation;
-using ARMeilleure.Translation.PTC;
 using Gtk;
 using LibHac.Common;
 using LibHac.Common.Keys;
-using LibHac.FsSystem;
 using LibHac.Ncm;
 using LibHac.Ns;
 using LibHac.Tools.FsSystem;
+using LibHac.Tools.FsSystem.NcaUtils;
 using Ryujinx.Audio.Backends.Dummy;
 using Ryujinx.Audio.Backends.OpenAL;
 using Ryujinx.Audio.Backends.SDL2;
@@ -15,10 +14,12 @@ using Ryujinx.Audio.Integration;
 using Ryujinx.Common;
 using Ryujinx.Common.Configuration;
 using Ryujinx.Common.Logging;
-using Ryujinx.Common.System;
+using Ryujinx.Common.SystemInterop;
+using Ryujinx.Cpu;
 using Ryujinx.Graphics.GAL;
 using Ryujinx.Graphics.GAL.Multithreading;
 using Ryujinx.Graphics.OpenGL;
+using Ryujinx.Graphics.Vulkan;
 using Ryujinx.HLE.FileSystem;
 using Ryujinx.HLE.HOS;
 using Ryujinx.HLE.HOS.Services.Account.Acc;
@@ -27,7 +28,6 @@ using Ryujinx.Input.GTK3;
 using Ryujinx.Input.HLE;
 using Ryujinx.Input.SDL2;
 using Ryujinx.Modules;
-using Ryujinx.Ui.App;
 using Ryujinx.Ui.App.Common;
 using Ryujinx.Ui.Applet;
 using Ryujinx.Ui.Common;
@@ -36,15 +36,15 @@ using Ryujinx.Ui.Common.Helper;
 using Ryujinx.Ui.Helper;
 using Ryujinx.Ui.Widgets;
 using Ryujinx.Ui.Windows;
+using Silk.NET.Vulkan;
+using SPB.Graphics.Vulkan;
 using System;
 using System.Diagnostics;
 using System.IO;
 using System.Reflection;
 using System.Threading;
 using System.Threading.Tasks;
-
 using GUI = Gtk.Builder.ObjectAttribute;
-using PtcLoadingState = ARMeilleure.Translation.PTC.PtcLoadingState;
 using ShaderCacheLoadingState = Ryujinx.Graphics.Gpu.Shader.ShaderCacheState;
 
 namespace Ryujinx.Ui
@@ -81,8 +81,6 @@ namespace Ryujinx.Ui
 
         public bool IsFocused;
 
-        private static bool UseVulkan = false;
-
 #pragma warning disable CS0169, CS0649, IDE0044
 
         [GUI] public MenuItem ExitMenuItem;
@@ -110,6 +108,7 @@ namespace Ryujinx.Ui
         [GUI] CheckMenuItem   _favToggle;
         [GUI] MenuItem        _firmwareInstallDirectory;
         [GUI] MenuItem        _firmwareInstallFile;
+        [GUI] MenuItem        _fileTypesSubMenu;
         [GUI] Label           _fifoStatus;
         [GUI] CheckMenuItem   _iconToggle;
         [GUI] CheckMenuItem   _developerToggle;
@@ -120,6 +119,7 @@ namespace Ryujinx.Ui
         [GUI] CheckMenuItem   _fileExtToggle;
         [GUI] CheckMenuItem   _pathToggle;
         [GUI] CheckMenuItem   _fileSizeToggle;
+        [GUI] Label           _gpuBackend;
         [GUI] Label           _dockedMode;
         [GUI] Label           _aspectRatio;
         [GUI] Label           _gameStatus;
@@ -141,16 +141,16 @@ namespace Ryujinx.Ui
 
         public MainWindow() : this(new Builder("Ryujinx.Ui.MainWindow.glade")) { }
 
-        private MainWindow(Builder builder) : base(builder.GetObject("_mainWin").Handle)
+        private MainWindow(Builder builder) : base(builder.GetRawOwnedObject("_mainWin"))
         {
             builder.Autoconnect(this);
 
             // Apply custom theme if needed.
             ThemeHelper.ApplyTheme();
-
+            Gdk.Monitor monitor = Display.GetMonitor(0);
             // Sets overridden fields.
-            int monitorWidth  = Display.PrimaryMonitor.Geometry.Width  * Display.PrimaryMonitor.ScaleFactor;
-            int monitorHeight = Display.PrimaryMonitor.Geometry.Height * Display.PrimaryMonitor.ScaleFactor;
+            int monitorWidth  = monitor.Geometry.Width  * monitor.ScaleFactor;
+            int monitorHeight = monitor.Geometry.Height * monitor.ScaleFactor;
 
             DefaultWidth  = monitorWidth  < 1280 ? monitorWidth  : 1280;
             DefaultHeight = monitorHeight < 760  ? monitorHeight : 760;
@@ -178,7 +178,7 @@ namespace Ryujinx.Ui
             VirtualFileSystem.FixExtraData(_libHacHorizonManager.RyujinxClient);
 
             _contentManager         = new ContentManager(_virtualFileSystem);
-            _accountManager         = new AccountManager(_libHacHorizonManager.RyujinxClient, Program.CommandLineProfile);
+            _accountManager         = new AccountManager(_libHacHorizonManager.RyujinxClient, CommandLineState.Profile);
             _userChannelPersistence = new UserChannelPersistence();
 
             // Instantiate GUI objects.
@@ -219,6 +219,8 @@ namespace Ryujinx.Ui
             _actionMenu.Sensitive = false;
             _pauseEmulation.Sensitive = false;
             _resumeEmulation.Sensitive = false;
+
+            _fileTypesSubMenu.Visible = FileAssociationHelper.IsTypeAssociationSupported;
 
             if (ConfigurationState.Instance.Ui.GuiColumns.FavColumn)        _favToggle.Active        = true;
             if (ConfigurationState.Instance.Ui.GuiColumns.IconColumn)       _iconToggle.Active       = true;
@@ -406,13 +408,14 @@ namespace Ryujinx.Ui
 
             IRenderer renderer;
 
-            if (UseVulkan)
+            if (ConfigurationState.Instance.Graphics.GraphicsBackend == GraphicsBackend.Vulkan)
             {
-                throw new NotImplementedException();
+                string preferredGpu = ConfigurationState.Instance.Graphics.PreferredGpu.Value;
+                renderer = new VulkanRenderer(CreateVulkanSurface, VulkanHelper.GetRequiredInstanceExtensions, preferredGpu);
             }
             else
             {
-                renderer = new Renderer();
+                renderer = new OpenGLRenderer();
             }
 
             BackendThreading threadingMode = ConfigurationState.Instance.Graphics.BackendThreading;
@@ -547,8 +550,8 @@ namespace Ryujinx.Ui
             }
 
             var memoryConfiguration = ConfigurationState.Instance.System.ExpandRam.Value
-                ? HLE.MemoryConfiguration.MemoryConfiguration6GB
-                : HLE.MemoryConfiguration.MemoryConfiguration4GB;
+                ? HLE.MemoryConfiguration.MemoryConfiguration6GiB
+                : HLE.MemoryConfiguration.MemoryConfiguration4GiB;
 
             IntegrityCheckLevel fsIntegrityCheckLevel = ConfigurationState.Instance.System.EnableFsIntegrityChecks ? IntegrityCheckLevel.ErrorOnInvalid : IntegrityCheckLevel.None;
 
@@ -574,15 +577,24 @@ namespace Ryujinx.Ui
                                                                           ConfigurationState.Instance.System.MemoryManagerMode,
                                                                           ConfigurationState.Instance.System.IgnoreMissingServices,
                                                                           ConfigurationState.Instance.Graphics.AspectRatio,
-                                                                          ConfigurationState.Instance.System.AudioVolume);
+                                                                          ConfigurationState.Instance.System.AudioVolume,
+                                                                          ConfigurationState.Instance.System.UseHypervisor);
 
             _emulationContext = new HLE.Switch(configuration);
         }
 
+        private SurfaceKHR CreateVulkanSurface(Instance instance, Vk vk)
+        {
+            return new SurfaceKHR((ulong)((VKRenderer)RendererWidget).CreateWindowSurface(instance.Handle));
+        }
+
         private void SetupProgressUiHandlers()
         {
-            Ptc.PtcStateChanged -= ProgressHandler;
-            Ptc.PtcStateChanged += ProgressHandler;
+            if (_emulationContext.Application.DiskCacheLoadState != null)
+            {
+                _emulationContext.Application.DiskCacheLoadState.StateChanged -= ProgressHandler;
+                _emulationContext.Application.DiskCacheLoadState.StateChanged += ProgressHandler;
+            }
 
             _emulationContext.Gpu.ShaderCacheStateChanged -= ProgressHandler;
             _emulationContext.Gpu.ShaderCacheStateChanged += ProgressHandler;
@@ -595,8 +607,8 @@ namespace Ryujinx.Ui
 
             switch (state)
             {
-                case PtcLoadingState ptcState:
-                    visible = ptcState != PtcLoadingState.Loaded;
+                case LoadState ptcState:
+                    visible = ptcState != LoadState.Loaded;
                     label = $"PTC : {current}/{total}";
                     break;
                 case ShaderCacheLoadingState shaderCacheState:
@@ -698,8 +710,6 @@ namespace Ryujinx.Ui
 
                 UpdateGraphicsConfig();
 
-                SetupProgressUiHandlers();
-
                 SystemVersion firmwareVersion = _contentManager.GetCurrentFirmwareVersion();
 
                 bool isDirectory     = Directory.Exists(path);
@@ -728,7 +738,6 @@ namespace Ryujinx.Ui
 
                                 _emulationContext.Dispose();
                                 SwitchToGameTable();
-                                RendererWidget.Dispose();
 
                                 return;
                             }
@@ -740,7 +749,6 @@ namespace Ryujinx.Ui
 
                             _emulationContext.Dispose();
                             SwitchToGameTable();
-                            RendererWidget.Dispose();
 
                             return;
                         }
@@ -763,7 +771,6 @@ namespace Ryujinx.Ui
 
                         _emulationContext.Dispose();
                         SwitchToGameTable();
-                        RendererWidget.Dispose();
 
                         return;
                     }
@@ -837,14 +844,14 @@ namespace Ryujinx.Ui
                     return;
                 }
 
+                SetupProgressUiHandlers();
+
                 _currentEmulatedGamePath = path;
 
                 _deviceExitStatus.Reset();
 
                 Translator.IsReadyForTranslation.Reset();
-#if MACOS_BUILD
-                CreateGameWindow();
-#else
+
                 Thread windowThread = new Thread(() =>
                 {
                     CreateGameWindow();
@@ -854,10 +861,10 @@ namespace Ryujinx.Ui
                 };
 
                 windowThread.Start();
-#endif
 
                 _gameLoaded           = true;
                 _actionMenu.Sensitive = true;
+                UpdateMenuItem.Sensitive = false;
 
                 _lastScannedAmiiboId = "";
 
@@ -875,7 +882,7 @@ namespace Ryujinx.Ui
 
         private RendererWidgetBase CreateRendererWidget()
         {
-            if (UseVulkan)
+            if (ConfigurationState.Instance.Graphics.GraphicsBackend == GraphicsBackend.Vulkan)
             {
                 return new VKRenderer(InputManager, ConfigurationState.Instance.Logger.GraphicsDebugLevel);
             }
@@ -946,12 +953,8 @@ namespace Ryujinx.Ui
             UpdateColumns();
             UpdateGameTable();
 
-            Task.Run(RefreshFirmwareLabel);
-            Task.Run(HandleRelaunch);
-
-            _actionMenu.Sensitive = false;
-            _firmwareInstallFile.Sensitive = true;
-            _firmwareInstallDirectory.Sensitive = true;
+            RefreshFirmwareLabel();
+            HandleRelaunch();
         }
 
         private void CreateGameWindow()
@@ -968,9 +971,6 @@ namespace Ryujinx.Ui
             RendererWidget.WaitEvent.WaitOne();
 
             RendererWidget.Start();
-
-            Ptc.Close();
-            PtcProfiler.Stop();
 
             _emulationContext.Dispose();
             _deviceExitStatus.Set();
@@ -1031,10 +1031,12 @@ namespace Ryujinx.Ui
             int   resScale       = ConfigurationState.Instance.Graphics.ResScale;
             float resScaleCustom = ConfigurationState.Instance.Graphics.ResScaleCustom;
 
-            Graphics.Gpu.GraphicsConfig.ResScale          = (resScale == -1) ? resScaleCustom : resScale;
-            Graphics.Gpu.GraphicsConfig.MaxAnisotropy     = ConfigurationState.Instance.Graphics.MaxAnisotropy;
-            Graphics.Gpu.GraphicsConfig.ShadersDumpPath   = ConfigurationState.Instance.Graphics.ShadersDumpPath;
-            Graphics.Gpu.GraphicsConfig.EnableShaderCache = ConfigurationState.Instance.Graphics.EnableShaderCache;
+            Graphics.Gpu.GraphicsConfig.ResScale                   = (resScale == -1) ? resScaleCustom : resScale;
+            Graphics.Gpu.GraphicsConfig.MaxAnisotropy              = ConfigurationState.Instance.Graphics.MaxAnisotropy;
+            Graphics.Gpu.GraphicsConfig.ShadersDumpPath            = ConfigurationState.Instance.Graphics.ShadersDumpPath;
+            Graphics.Gpu.GraphicsConfig.EnableShaderCache          = ConfigurationState.Instance.Graphics.EnableShaderCache;
+            Graphics.Gpu.GraphicsConfig.EnableTextureRecompression = ConfigurationState.Instance.Graphics.EnableTextureRecompression;
+            Graphics.Gpu.GraphicsConfig.EnableMacroHLE             = ConfigurationState.Instance.Graphics.EnableMacroHLE;
         }
 
         public void SaveConfig()
@@ -1125,6 +1127,7 @@ namespace Ryujinx.Ui
                 _gpuName.Text      = args.GpuName;
                 _dockedMode.Text   = args.DockedMode;
                 _aspectRatio.Text  = args.AspectRatio;
+                _gpuBackend.Text   = args.GpuBackend;
                 _volumeStatus.Text = GetVolumeLabelText(args.Volume);
 
                 if (args.VSyncEnabled)
@@ -1294,7 +1297,7 @@ namespace Ryujinx.Ui
 
         private void OpenLogsFolder_Pressed(object sender, EventArgs args)
         {
-            string logPath = System.IO.Path.Combine(ReleaseInformations.GetBaseApplicationDirectory(), "Logs");
+            string logPath = System.IO.Path.Combine(ReleaseInformation.GetBaseApplicationDirectory(), "Logs");
 
             new DirectoryInfo(logPath).Create();
 
@@ -1330,6 +1333,7 @@ namespace Ryujinx.Ui
 
             _pauseEmulation.Sensitive = false;
             _resumeEmulation.Sensitive = false;
+            UpdateMenuItem.Sensitive = true;
             RendererWidget?.Exit();
         }
 
@@ -1499,6 +1503,30 @@ namespace Ryujinx.Ui
             });
         }
 
+        private void InstallFileTypes_Pressed(object sender, EventArgs e)
+        {
+            if (FileAssociationHelper.Install())
+            {
+                GtkDialog.CreateInfoDialog("Install file types", "File types successfully installed!");
+            }
+            else
+            {
+                GtkDialog.CreateErrorDialog("Failed to install file types.");
+            }
+        }
+
+        private void UninstallFileTypes_Pressed(object sender, EventArgs e)
+        {
+            if (FileAssociationHelper.Uninstall())
+            {
+                GtkDialog.CreateInfoDialog("Uninstall file types", "File types successfully uninstalled!");
+            }
+            else
+            {
+                GtkDialog.CreateErrorDialog("Failed to uninstall file types.");
+            }
+        }
+
         private void HandleRelaunch()
         {
             if (_userChannelPersistence.PreviousIndex != -1 && _userChannelPersistence.ShouldRestart)
@@ -1512,6 +1540,9 @@ namespace Ryujinx.Ui
                 // otherwise, clear state.
                 _userChannelPersistence  = new UserChannelPersistence();
                 _currentEmulatedGamePath = null;
+                _actionMenu.Sensitive = false;
+                _firmwareInstallFile.Sensitive = true;
+                _firmwareInstallDirectory.Sensitive = true;
             }
         }
 

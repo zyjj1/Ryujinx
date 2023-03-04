@@ -17,7 +17,6 @@ using Ryujinx.HLE.HOS;
 using Ryujinx.HLE.HOS.Services.Account.Acc;
 using Ryujinx.Ui.Common.Configuration;
 using Ryujinx.Ui.Common.Helper;
-using Ryujinx.Ui.Helper;
 using Ryujinx.Ui.Windows;
 using System;
 using System.Buffers;
@@ -225,7 +224,7 @@ namespace Ryujinx.Ui.Widgets
                             {
                                 using var ncaFile = new UniqueRef<IFile>();
 
-                                pfs.OpenFile(ref ncaFile.Ref(), fileEntry.FullPath.ToU8Span(), OpenMode.Read).ThrowIfFailure();
+                                pfs.OpenFile(ref ncaFile.Ref, fileEntry.FullPath.ToU8Span(), OpenMode.Read).ThrowIfFailure();
 
                                 Nca nca = new Nca(_virtualFileSystem.KeySet, ncaFile.Release().AsStorage());
 
@@ -281,8 +280,8 @@ namespace Ryujinx.Ui.Widgets
                         using var uniqueSourceFs = new UniqueRef<IFileSystem>(ncaFileSystem);
                         using var uniqueOutputFs = new UniqueRef<IFileSystem>(new LocalFileSystem(destination));
 
-                        fsClient.Register(source.ToU8Span(), ref uniqueSourceFs.Ref());
-                        fsClient.Register(output.ToU8Span(), ref uniqueOutputFs.Ref());
+                        fsClient.Register(source.ToU8Span(), ref uniqueSourceFs.Ref);
+                        fsClient.Register(output.ToU8Span(), ref uniqueOutputFs.Ref);
 
                         (Result? resultCode, bool canceled) = CopyDirectory(fsClient, $"{source}:/", $"{output}:/");
 
@@ -523,7 +522,7 @@ namespace Ryujinx.Ui.Widgets
             DirectoryInfo mainDir   = new DirectoryInfo(System.IO.Path.Combine(AppDataManager.GamesDirPath, _titleIdText, "cache", "cpu", "0"));
             DirectoryInfo backupDir = new DirectoryInfo(System.IO.Path.Combine(AppDataManager.GamesDirPath, _titleIdText, "cache", "cpu", "1"));
 
-            MessageDialog warningDialog = GtkDialog.CreateConfirmationDialog("Warning", $"You are about to delete the PPTC cache for :\n\n<b>{_titleName}</b>\n\nAre you sure you want to proceed?");
+            MessageDialog warningDialog = GtkDialog.CreateConfirmationDialog("Warning", $"You are about to queue a PPTC rebuild on the next boot of:\n\n<b>{_titleName}</b>\n\nAre you sure you want to proceed?");
 
             List<FileInfo> cacheFiles = new List<FileInfo>();
 

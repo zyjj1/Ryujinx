@@ -1,6 +1,5 @@
 ﻿using Ryujinx.Common.Pools;
 using Ryujinx.Memory.Range;
-using System;
 using System.Collections.Generic;
 
 namespace Ryujinx.Memory.Tracking
@@ -137,12 +136,11 @@ namespace Ryujinx.Memory.Tracking
         /// <param name="size">Size of the region</param>
         /// <param name="handles">Handles to inherit state from or reuse. When none are present, provide null</param>
         /// <param name="granularity">Desired granularity of write tracking</param>
+        /// <param name="id">Handle ID</param>
         /// <returns>The memory tracking handle</returns>
-        public MultiRegionHandle BeginGranularTracking(ulong address, ulong size, IEnumerable<IRegionHandle> handles, ulong granularity)
+        public MultiRegionHandle BeginGranularTracking(ulong address, ulong size, IEnumerable<IRegionHandle> handles, ulong granularity, int id)
         {
-            (address, size) = PageAlign(address, size);
-
-            return new MultiRegionHandle(this, address, size, handles, granularity);
+            return new MultiRegionHandle(this, address, size, handles, granularity, id);
         }
 
         /// <summary>
@@ -151,12 +149,13 @@ namespace Ryujinx.Memory.Tracking
         /// <param name="address">CPU virtual address of the region</param>
         /// <param name="size">Size of the region</param>
         /// <param name="granularity">Desired granularity of write tracking</param>
+        /// <param name="id">Handle ID</param>
         /// <returns>The memory tracking handle</returns>
-        public SmartMultiRegionHandle BeginSmartGranularTracking(ulong address, ulong size, ulong granularity)
+        public SmartMultiRegionHandle BeginSmartGranularTracking(ulong address, ulong size, ulong granularity, int id)
         {
             (address, size) = PageAlign(address, size);
 
-            return new SmartMultiRegionHandle(this, address, size, granularity);
+            return new SmartMultiRegionHandle(this, address, size, granularity, id);
         }
 
         /// <summary>
@@ -164,52 +163,53 @@ namespace Ryujinx.Memory.Tracking
         /// </summary>
         /// <param name="address">CPU virtual address of the region</param>
         /// <param name="size">Size of the region</param>
+        /// <param name="id">Handle ID</param>
         /// <returns>The memory tracking handle</returns>
-        public RegionHandle BeginTracking(ulong address, ulong size)
+        public RegionHandle BeginTracking(ulong address, ulong size, int id)
         {
-            (address, size) = PageAlign(address, size);
+            var (paAddress, paSize) = PageAlign(address, size);
 
             lock (TrackingLock)
             {
-                RegionHandle handle = new RegionHandle(this, address, size, _memoryManager.IsRangeMapped(address, size));
+                bool mapped = _memoryManager.IsRangeMapped(address, size);
+                RegionHandle handle = new RegionHandle(this, paAddress, paSize, address, size, id, mapped);
 
                 return handle;
             }
         }
 
         /// <summary>
-        /// Signal that a virtual memory event happened at the given location (one byte).
+        /// Obtains a memory tracking handle for the given virtual region. This should be disposed when finished with.
         /// </summary>
-        /// <param name="address">Virtual address accessed</param>
-        /// <param name="write">Whether the address was written to or read</param>
-        /// <returns>True if the event triggered any tracking regions, false otherwise</returns>
-        public bool VirtualMemoryEventTracking(ulong address, bool write)
+        /// <param name="address">CPU virtual address of the region</param>
+        /// <param name="size">Size of the region</param>
+        /// <param name="bitmap">The bitmap owning the dirty flag for this handle</param>
+        /// <param name="bit">The bit of this handle within the dirty flag</param>
+        /// <param name="id">Handle ID</param>
+        /// <returns>The memory tracking handle</returns>
+        internal RegionHandle BeginTrackingBitmap(ulong address, ulong size, ConcurrentBitmap bitmap, int bit, int id)
         {
-            return VirtualMemoryEvent(address, 1, write);
+            var (paAddress, paSize) = PageAlign(address, size);
+
+            lock (TrackingLock)
+            {
+                bool mapped = _memoryManager.IsRangeMapped(address, size);
+                RegionHandle handle = new RegionHandle(this, paAddress, paSize, address, size, bitmap, bit, id, mapped);
+
+                return handle;
+            }
         }
 
         /// <summary>
         /// Signal that a virtual memory event happened at the given location.
-        /// This is similar VirtualMemoryEvent, but on Windows, it might also return true after a partial unmap.
-        /// This should only be called from the exception handler.
         /// </summary>
         /// <param name="address">Virtual address accessed</param>
         /// <param name="size">Size of the region affected in bytes</param>
         /// <param name="write">Whether the region was written to or read</param>
-        /// <param name="precise">True if the access is precise, false otherwise</param>
         /// <returns>True if the event triggered any tracking regions, false otherwise</returns>
-        public bool VirtualMemoryEventEh(ulong address, ulong size, bool write, bool precise = false)
+        public bool VirtualMemoryEvent(ulong address, ulong size, bool write)
         {
-            // Windows has a limitation, it can't do partial unmaps.
-            // For this reason, we need to unmap the whole range and then remap the sub-ranges.
-            // When this happens, we might have caused a undesirable access violation from the time that the range was unmapped.
-            // In this case, try again as the memory might be mapped now.
-            if (OperatingSystem.IsWindows() && MemoryManagementWindows.RetryFromAccessViolation())
-            {
-                return true;
-            }
-
-            return VirtualMemoryEvent(address, size, write, precise);
+            return VirtualMemoryEvent(address, size, write, precise: false, null);
         }
 
         /// <summary>
@@ -221,8 +221,9 @@ namespace Ryujinx.Memory.Tracking
         /// <param name="size">Size of the region affected in bytes</param>
         /// <param name="write">Whether the region was written to or read</param>
         /// <param name="precise">True if the access is precise, false otherwise</param>
+        /// <param name="exemptId">Optional ID that of the handles that should not be signalled</param>
         /// <returns>True if the event triggered any tracking regions, false otherwise</returns>
-        public bool VirtualMemoryEvent(ulong address, ulong size, bool write, bool precise = false)
+        public bool VirtualMemoryEvent(ulong address, ulong size, bool write, bool precise, int? exemptId = null)
         {
             // Look up the virtual region using the region list.
             // Signal up the chain to relevant handles.
@@ -237,10 +238,12 @@ namespace Ryujinx.Memory.Tracking
 
                 if (count == 0 && !precise)
                 {
-                    if (_memoryManager.IsMapped(address))
+                    if (_memoryManager.IsRangeMapped(address, size))
                     {
+                        // TODO: There is currently the possibility that a page can be protected after its virtual region is removed.
+                        // This code handles that case when it happens, but it would be better to find out how this happens.
                         _memoryManager.TrackingReprotect(address & ~(ulong)(_pageSize - 1), (ulong)_pageSize, MemoryPermission.ReadAndWrite);
-                        return false; // We can't handle this - it's probably a real invalid access.
+                        return true; // This memory _should_ be mapped, so we need to try again.
                     }
                     else
                     {
@@ -255,11 +258,11 @@ namespace Ryujinx.Memory.Tracking
 
                         if (precise)
                         {
-                            region.SignalPrecise(address, size, write);
+                            region.SignalPrecise(address, size, write, exemptId);
                         }
                         else
                         {
-                            region.Signal(address, size, write);
+                            region.Signal(address, size, write, exemptId);
                         }
                     }
                 }

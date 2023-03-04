@@ -10,19 +10,24 @@ namespace Ryujinx.Graphics.Gpu.Image
     /// <summary>
     /// Texture pool.
     /// </summary>
-    class TexturePool : Pool<Texture, TextureDescriptor>
+    class TexturePool : Pool<Texture, TextureDescriptor>, IPool<TexturePool>
     {
         private readonly GpuChannel _channel;
         private readonly ConcurrentQueue<Texture> _dereferenceQueue = new ConcurrentQueue<Texture>();
         private TextureDescriptor _defaultDescriptor;
 
         /// <summary>
-        /// Intrusive linked list node used on the texture pool cache.
+        /// Linked list node used on the texture pool cache.
         /// </summary>
         public LinkedListNode<TexturePool> CacheNode { get; set; }
 
         /// <summary>
-        /// Constructs a new instance of the texture pool.
+        /// Timestamp used by the texture pool cache, updated on every use of this texture pool.
+        /// </summary>
+        public ulong CacheTimestamp { get; set; }
+
+        /// <summary>
+        /// Creates a new instance of the texture pool.
         /// </summary>
         /// <param name="context">GPU context that the texture pool belongs to</param>
         /// <param name="channel">GPU channel that the texture pool belongs to</param>
@@ -47,16 +52,21 @@ namespace Ryujinx.Graphics.Gpu.Image
 
             if (texture == null)
             {
-                TextureInfo info = GetInfo(descriptor, out int layerSize);
+                texture = PhysicalMemory.TextureCache.FindShortCache(descriptor);
 
-                ProcessDereferenceQueue();
-
-                texture = PhysicalMemory.TextureCache.FindOrCreateTexture(_channel.MemoryManager, TextureSearchFlags.ForSampler, info, layerSize);
-
-                // If this happens, then the texture address is invalid, we can't add it to the cache.
                 if (texture == null)
                 {
-                    return ref descriptor;
+                    TextureInfo info = GetInfo(descriptor, out int layerSize);
+
+                    ProcessDereferenceQueue();
+
+                    texture = PhysicalMemory.TextureCache.FindOrCreateTexture(_channel.MemoryManager, TextureSearchFlags.ForSampler, info, layerSize);
+
+                    // If this happens, then the texture address is invalid, we can't add it to the cache.
+                    if (texture == null)
+                    {
+                        return ref descriptor;
+                    }
                 }
 
                 texture.IncrementReferenceCount(this, id);
@@ -67,22 +77,7 @@ namespace Ryujinx.Graphics.Gpu.Image
             }
             else
             {
-                if (texture.ChangedSize)
-                {
-                    // Texture changed size at one point - it may be a different size than the sampler expects.
-                    // This can be triggered when the size is changed by a size hint on copy or draw, but the texture has been sampled before.
-
-                    int baseLevel = descriptor.UnpackBaseLevel();
-                    int width = Math.Max(1, descriptor.UnpackWidth() >> baseLevel);
-                    int height = Math.Max(1, descriptor.UnpackHeight() >> baseLevel);
-
-                    if (texture.Info.Width != width || texture.Info.Height != height)
-                    {
-                        texture.ChangeSize(width, height, texture.Info.DepthOrLayers);
-                    }
-                }
-
-                // Memory is automatically synchronized on texture creation.
+                // On the path above (texture not yet in the pool), memory is automatically synchronized on texture creation.
                 texture.SynchronizeMemory();
             }
 
@@ -203,13 +198,19 @@ namespace Ryujinx.Graphics.Gpu.Image
 
                 if (texture != null)
                 {
-                    TextureDescriptor descriptor = PhysicalMemory.Read<TextureDescriptor>(address);
+                    ref TextureDescriptor cachedDescriptor = ref DescriptorCache[id];
+                    ref readonly TextureDescriptor descriptor = ref GetDescriptorRefAddress(address);
 
                     // If the descriptors are the same, the texture is the same,
                     // we don't need to remove as it was not modified. Just continue.
-                    if (descriptor.Equals(ref DescriptorCache[id]))
+                    if (descriptor.Equals(ref cachedDescriptor))
                     {
                         continue;
+                    }
+
+                    if (texture.HasOneReference())
+                    {
+                        _channel.MemoryManager.Physical.TextureCache.AddShortCache(texture, ref cachedDescriptor);
                     }
 
                     texture.DecrementReferenceCount(this, id);

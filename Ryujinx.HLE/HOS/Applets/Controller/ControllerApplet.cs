@@ -1,12 +1,11 @@
+using Ryujinx.Common.Logging;
+using Ryujinx.HLE.HOS.Services.Am.AppletAE;
+using Ryujinx.HLE.HOS.Services.Hid;
+using Ryujinx.HLE.HOS.Services.Hid.Types;
 using System;
 using System.IO;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
-using Ryujinx.Common.Logging;
-using Ryujinx.HLE.HOS.Services.Hid;
-using Ryujinx.HLE.HOS.Services.Hid.Types;
-using Ryujinx.HLE.HOS.Services.Am.AppletAE;
-
 using static Ryujinx.HLE.HOS.Services.Hid.HidServer.HidUtils;
 
 namespace Ryujinx.HLE.HOS.Applets
@@ -72,8 +71,15 @@ namespace Ryujinx.HLE.HOS.Applets
 
             int playerMin = argHeader.PlayerCountMin;
             int playerMax = argHeader.PlayerCountMax;
+            bool singleMode = argHeader.EnableSingleMode != 0;
 
             Logger.Stub?.PrintStub(LogClass.ServiceHid, $"ControllerApplet Arg {playerMin} {playerMax} {argHeader.EnableTakeOverConnection} {argHeader.EnableSingleMode}");
+
+            if (singleMode)
+            {
+                // Applications can set an arbitrary player range even with SingleMode, so clamp it
+                playerMin = playerMax = 1;
+            }
 
             int configuredCount = 0;
             PlayerIndex primaryIndex = PlayerIndex.Unknown;

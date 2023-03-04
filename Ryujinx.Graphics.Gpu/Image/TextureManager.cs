@@ -16,6 +16,7 @@ namespace Ryujinx.Graphics.Gpu.Image
         private readonly TextureBindingsManager _cpBindingsManager;
         private readonly TextureBindingsManager _gpBindingsManager;
         private readonly TexturePoolCache _texturePoolCache;
+        private readonly SamplerPoolCache _samplerPoolCache;
 
         private readonly Texture[] _rtColors;
         private readonly ITexture[] _rtHostColors;
@@ -41,58 +42,36 @@ namespace Ryujinx.Graphics.Gpu.Image
             _channel = channel;
 
             TexturePoolCache texturePoolCache = new TexturePoolCache(context);
+            SamplerPoolCache samplerPoolCache = new SamplerPoolCache(context);
 
             float[] scales = new float[64];
             new Span<float>(scales).Fill(1f);
 
-            _cpBindingsManager = new TextureBindingsManager(context, channel, texturePoolCache, scales, isCompute: true);
-            _gpBindingsManager = new TextureBindingsManager(context, channel, texturePoolCache, scales, isCompute: false);
+            _cpBindingsManager = new TextureBindingsManager(context, channel, texturePoolCache, samplerPoolCache, scales, isCompute: true);
+            _gpBindingsManager = new TextureBindingsManager(context, channel, texturePoolCache, samplerPoolCache, scales, isCompute: false);
             _texturePoolCache = texturePoolCache;
+            _samplerPoolCache = samplerPoolCache;
 
             _rtColors = new Texture[Constants.TotalRenderTargets];
             _rtHostColors = new ITexture[Constants.TotalRenderTargets];
         }
 
         /// <summary>
-        /// Rents the texture bindings array of the compute pipeline.
+        /// Sets the texture and image bindings for the compute pipeline.
         /// </summary>
-        /// <param name="count">The number of bindings needed</param>
-        /// <returns>The texture bindings array</returns>
-        public TextureBindingInfo[] RentComputeTextureBindings(int count)
+        /// <param name="bindings">Bindings for the active shader</param>
+        public void SetComputeBindings(CachedShaderBindings bindings)
         {
-            return _cpBindingsManager.RentTextureBindings(0, count);
+            _cpBindingsManager.SetBindings(bindings);
         }
 
         /// <summary>
-        /// Rents the texture bindings array for a given stage on the graphics pipeline.
+        /// Sets the texture and image bindings for the graphics pipeline.
         /// </summary>
-        /// <param name="stage">The index of the shader stage to bind the textures</param>
-        /// <param name="count">The number of bindings needed</param>
-        /// <returns>The texture bindings array</returns>
-        public TextureBindingInfo[] RentGraphicsTextureBindings(int stage, int count)
+        /// <param name="bindings">Bindings for the active shader</param>
+        public void SetGraphicsBindings(CachedShaderBindings bindings)
         {
-            return _gpBindingsManager.RentTextureBindings(stage, count);
-        }
-
-        /// <summary>
-        /// Rents the image bindings array of the compute pipeline.
-        /// </summary>
-        /// <param name="count">The number of bindings needed</param>
-        /// <returns>The image bindings array</returns>
-        public TextureBindingInfo[] RentComputeImageBindings(int count)
-        {
-            return _cpBindingsManager.RentImageBindings(0, count);
-        }
-
-        /// <summary>
-        /// Rents the image bindings array for a given stage on the graphics pipeline.
-        /// </summary>
-        /// <param name="stage">The index of the shader stage to bind the images</param>
-        /// <param name="count">The number of bindings needed</param>
-        /// <returns>The image bindings array</returns>
-        public TextureBindingInfo[] RentGraphicsImageBindings(int stage, int count)
-        {
-            return _gpBindingsManager.RentImageBindings(stage, count);
+            _gpBindingsManager.SetBindings(bindings);
         }
 
         /// <summary>
@@ -105,32 +84,12 @@ namespace Ryujinx.Graphics.Gpu.Image
         }
 
         /// <summary>
-        /// Sets the max binding indexes on the compute pipeline.
-        /// </summary>
-        /// <param name="maxTextureBinding">The maximum texture binding</param>
-        /// <param name="maxImageBinding">The maximum image binding</param>
-        public void SetComputeMaxBindings(int maxTextureBinding, int maxImageBinding)
-        {
-            _cpBindingsManager.SetMaxBindings(maxTextureBinding, maxImageBinding);
-        }
-
-        /// <summary>
         /// Sets the texture constant buffer index on the graphics pipeline.
         /// </summary>
         /// <param name="index">The texture constant buffer index</param>
         public void SetGraphicsTextureBufferIndex(int index)
         {
             _gpBindingsManager.SetTextureBufferIndex(index);
-        }
-
-        /// <summary>
-        /// Sets the max binding indexes on the graphics pipeline.
-        /// </summary>
-        /// <param name="maxTextureBinding">The maximum texture binding</param>
-        /// <param name="maxImageBinding">The maximum image binding</param>
-        public void SetGraphicsMaxBindings(int maxTextureBinding, int maxImageBinding)
-        {
-            _gpBindingsManager.SetMaxBindings(maxTextureBinding, maxImageBinding);
         }
 
         /// <summary>
@@ -368,6 +327,10 @@ namespace Ryujinx.Graphics.Gpu.Image
             // we must rebind everything.
             // Since compute work happens less often, we always do that
             // before and after the compute dispatch.
+
+            _texturePoolCache.Tick();
+            _samplerPoolCache.Tick();
+
             _cpBindingsManager.Rebind();
             bool result = _cpBindingsManager.CommitBindings(specState);
             _gpBindingsManager.Rebind();
@@ -382,6 +345,9 @@ namespace Ryujinx.Graphics.Gpu.Image
         /// <returns>True if all bound textures match the current shader specialization state, false otherwise</returns>
         public bool CommitGraphicsBindings(ShaderSpecializationState specState)
         {
+            _texturePoolCache.Tick();
+            _samplerPoolCache.Tick();
+
             bool result = _gpBindingsManager.CommitBindings(specState);
 
             UpdateRenderTargets();
@@ -475,22 +441,6 @@ namespace Ryujinx.Graphics.Gpu.Image
         /// Update host framebuffer attachments based on currently bound render target buffers.
         /// </summary>
         /// <remarks>
-        /// All attachments other than <paramref name="index"/> will be unbound.
-        /// </remarks>
-        /// <param name="index">Index of the render target color to be updated</param>
-        public void UpdateRenderTarget(int index)
-        {
-            new Span<ITexture>(_rtHostColors).Fill(null);
-            _rtHostColors[index] = _rtColors[index]?.HostTexture;
-            _rtHostDs = null;
-
-            _context.Renderer.Pipeline.SetRenderTargets(_rtHostColors, null);
-        }
-
-        /// <summary>
-        /// Update host framebuffer attachments based on currently bound render target buffers.
-        /// </summary>
-        /// <remarks>
         /// All color attachments will be unbound.
         /// </remarks>
         public void UpdateRenderTargetDepthStencil()
@@ -499,6 +449,15 @@ namespace Ryujinx.Graphics.Gpu.Image
             _rtHostDs = _rtDepthStencil?.HostTexture;
 
             _context.Renderer.Pipeline.SetRenderTargets(_rtHostColors, _rtHostDs);
+        }
+
+        /// <summary>
+        /// Forces the texture and sampler pools to be re-loaded from the cache on next use.
+        /// </summary>
+        public void ReloadPools()
+        {
+            _cpBindingsManager.ReloadPools();
+            _gpBindingsManager.ReloadPools();
         }
 
         /// <summary>
@@ -523,8 +482,8 @@ namespace Ryujinx.Graphics.Gpu.Image
         /// </summary>
         public void Dispose()
         {
-            _cpBindingsManager.Dispose();
-            _gpBindingsManager.Dispose();
+            // Textures are owned by the texture cache, so we shouldn't dispose the texture pool cache.
+            _samplerPoolCache.Dispose();
 
             for (int i = 0; i < _rtColors.Length; i++)
             {

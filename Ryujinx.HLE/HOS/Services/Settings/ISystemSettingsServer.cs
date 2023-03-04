@@ -5,9 +5,9 @@ using LibHac.Fs.Fsa;
 using LibHac.FsSystem;
 using LibHac.Ncm;
 using LibHac.Tools.FsSystem.NcaUtils;
+using Ryujinx.Common;
 using Ryujinx.Common.Logging;
 using Ryujinx.HLE.HOS.SystemState;
-using Ryujinx.HLE.Utilities;
 using System;
 using System.IO;
 using System.Text;
@@ -290,9 +290,7 @@ namespace Ryujinx.HLE.HOS.Services.Settings
             // NOTE: If miiAuthorId is null ResultCode.NullMiiAuthorIdBuffer is returned.
             //       Doesn't occur in our case.
 
-            UInt128 miiAuthorId = Mii.Helper.GetDeviceId();
-
-            miiAuthorId.Write(context.ResponseData);
+            context.ResponseData.Write(Mii.Helper.GetDeviceId());
 
             return ResultCode.Success;
         }
@@ -323,7 +321,7 @@ namespace Ryujinx.HLE.HOS.Services.Settings
 
                 using var firmwareFile = new UniqueRef<IFile>();
 
-                Result result = firmwareRomFs.OpenFile(ref firmwareFile.Ref(), "/file".ToU8Span(), OpenMode.Read);
+                Result result = firmwareRomFs.OpenFile(ref firmwareFile.Ref, "/file".ToU8Span(), OpenMode.Read);
                 if (result.IsFailure())
                 {
                     return null;

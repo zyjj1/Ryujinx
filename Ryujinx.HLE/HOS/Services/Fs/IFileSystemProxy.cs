@@ -12,9 +12,10 @@ using LibHac.Tools.FsSystem.NcaUtils;
 using Ryujinx.Common;
 using Ryujinx.Common.Logging;
 using Ryujinx.HLE.HOS.Services.Fs.FileSystemProxy;
+using System;
 using System.IO;
-
 using static Ryujinx.HLE.Utilities.StringUtils;
+using GameCardHandle = System.UInt32;
 using IFileSystem = LibHac.FsSrv.Sf.IFileSystem;
 using IStorage = LibHac.FsSrv.Sf.IStorage;
 using RightsId = LibHac.Fs.RightsId;
@@ -25,6 +26,7 @@ namespace Ryujinx.HLE.HOS.Services.Fs
     class IFileSystemProxy : DisposableIpcService
     {
         private SharedRef<LibHac.FsSrv.Sf.IFileSystemProxy> _baseFileSystemProxy;
+        private ulong _pid;
 
         public IFileSystemProxy(ServiceCtx context) : base(context.Device.System.FsServer)
         {
@@ -36,6 +38,8 @@ namespace Ryujinx.HLE.HOS.Services.Fs
         // SetCurrentProcess(u64, pid)
         public ResultCode SetCurrentProcess(ServiceCtx context)
         {
+            _pid = context.Request.HandleDesc.PId;
+
             return ResultCode.Success;
         }
 
@@ -104,10 +108,10 @@ namespace Ryujinx.HLE.HOS.Services.Fs
             ref readonly var path = ref FileSystemProxyHelper.GetFspPath(context);
             using var fileSystem = new SharedRef<IFileSystem>();
 
-            Result result = _baseFileSystemProxy.Get.OpenBisFileSystem(ref fileSystem.Ref(), in path, bisPartitionId);
+            Result result = _baseFileSystemProxy.Get.OpenBisFileSystem(ref fileSystem.Ref, in path, bisPartitionId);
             if (result.IsFailure()) return (ResultCode)result.Value;
 
-            MakeObject(context, new FileSystemProxy.IFileSystem(ref fileSystem.Ref()));
+            MakeObject(context, new FileSystemProxy.IFileSystem(ref fileSystem.Ref));
 
             return ResultCode.Success;
         }
@@ -119,10 +123,10 @@ namespace Ryujinx.HLE.HOS.Services.Fs
             BisPartitionId bisPartitionId = (BisPartitionId)context.RequestData.ReadInt32();
             using var storage = new SharedRef<IStorage>();
 
-            Result result = _baseFileSystemProxy.Get.OpenBisStorage(ref storage.Ref(), bisPartitionId);
+            Result result = _baseFileSystemProxy.Get.OpenBisStorage(ref storage.Ref, bisPartitionId);
             if (result.IsFailure()) return (ResultCode)result.Value;
 
-            MakeObject(context, new FileSystemProxy.IStorage(ref storage.Ref()));
+            MakeObject(context, new FileSystemProxy.IStorage(ref storage.Ref));
 
             return ResultCode.Success;
         }
@@ -140,10 +144,10 @@ namespace Ryujinx.HLE.HOS.Services.Fs
         {
             using var fileSystem = new SharedRef<IFileSystem>();
 
-            Result result = _baseFileSystemProxy.Get.OpenSdCardFileSystem(ref fileSystem.Ref());
+            Result result = _baseFileSystemProxy.Get.OpenSdCardFileSystem(ref fileSystem.Ref);
             if (result.IsFailure()) return (ResultCode)result.Value;
 
-            MakeObject(context, new FileSystemProxy.IFileSystem(ref fileSystem.Ref()));
+            MakeObject(context, new FileSystemProxy.IFileSystem(ref fileSystem.Ref));
 
             return ResultCode.Success;
         }
@@ -238,14 +242,14 @@ namespace Ryujinx.HLE.HOS.Services.Fs
         // OpenGameCardStorage(u32 handle, u32 partitionId) -> object<nn::fssrv::sf::IStorage>
         public ResultCode OpenGameCardStorage(ServiceCtx context)
         {
-            GameCardHandle handle = new GameCardHandle(context.RequestData.ReadInt32());
+            GameCardHandle handle = context.RequestData.ReadUInt32();
             GameCardPartitionRaw partitionId = (GameCardPartitionRaw)context.RequestData.ReadInt32();
             using var storage = new SharedRef<IStorage>();
 
-            Result result = _baseFileSystemProxy.Get.OpenGameCardStorage(ref storage.Ref(), handle, partitionId);
+            Result result = _baseFileSystemProxy.Get.OpenGameCardStorage(ref storage.Ref, handle, partitionId);
             if (result.IsFailure()) return (ResultCode)result.Value;
 
-            MakeObject(context, new FileSystemProxy.IStorage(ref storage.Ref()));
+            MakeObject(context, new FileSystemProxy.IStorage(ref storage.Ref));
 
             return ResultCode.Success;
         }
@@ -254,14 +258,14 @@ namespace Ryujinx.HLE.HOS.Services.Fs
         // OpenGameCardFileSystem(u32 handle, u32 partitionId) -> object<nn::fssrv::sf::IFileSystem>
         public ResultCode OpenGameCardFileSystem(ServiceCtx context)
         {
-            GameCardHandle handle = new GameCardHandle(context.RequestData.ReadInt32());
+            GameCardHandle handle = context.RequestData.ReadUInt32();
             GameCardPartition partitionId = (GameCardPartition)context.RequestData.ReadInt32();
             using var fileSystem = new SharedRef<IFileSystem>();
 
-            Result result = _baseFileSystemProxy.Get.OpenGameCardFileSystem(ref fileSystem.Ref(), handle, partitionId);
+            Result result = _baseFileSystemProxy.Get.OpenGameCardFileSystem(ref fileSystem.Ref, handle, partitionId);
             if (result.IsFailure()) return (ResultCode)result.Value;
 
-            MakeObject(context, new FileSystemProxy.IFileSystem(ref fileSystem.Ref()));
+            MakeObject(context, new FileSystemProxy.IFileSystem(ref fileSystem.Ref));
 
             return ResultCode.Success;
         }
@@ -314,6 +318,17 @@ namespace Ryujinx.HLE.HOS.Services.Fs
             return (ResultCode)_baseFileSystemProxy.Get.CreateSaveDataFileSystemWithHashSalt(in attribute, in creationInfo, in metaCreateInfo, in hashSalt).Value;
         }
 
+        [CommandHipc(37)] // 14.0.0+
+        // CreateSaveDataFileSystemWithCreationInfo2(buffer<nn::fs::SaveDataCreationInfo2, 25> creationInfo) -> ()
+        public ResultCode CreateSaveDataFileSystemWithCreationInfo2(ServiceCtx context)
+        {
+            byte[] creationInfoBuffer = new byte[context.Request.SendBuff[0].Size];
+            context.Memory.Read(context.Request.SendBuff[0].Position, creationInfoBuffer);
+            ref readonly SaveDataCreationInfo2 creationInfo = ref SpanHelpers.AsReadOnlyStruct<SaveDataCreationInfo2>(creationInfoBuffer);
+
+            return (ResultCode)_baseFileSystemProxy.Get.CreateSaveDataFileSystemWithCreationInfo2(in creationInfo).Value;
+        }
+
         [CommandHipc(51)]
         // OpenSaveDataFileSystem(u8 spaceId, nn::fs::SaveDataAttribute attribute) -> object<nn::fssrv::sf::IFileSystem> saveDataFs
         public ResultCode OpenSaveDataFileSystem(ServiceCtx context)
@@ -322,10 +337,10 @@ namespace Ryujinx.HLE.HOS.Services.Fs
             SaveDataAttribute attribute = context.RequestData.ReadStruct<SaveDataAttribute>();
             using var fileSystem = new SharedRef<IFileSystem>();
 
-            Result result = _baseFileSystemProxy.Get.OpenSaveDataFileSystem(ref fileSystem.Ref(), spaceId, in attribute);
+            Result result = _baseFileSystemProxy.Get.OpenSaveDataFileSystem(ref fileSystem.Ref, spaceId, in attribute);
             if (result.IsFailure()) return (ResultCode)result.Value;
 
-            MakeObject(context, new FileSystemProxy.IFileSystem(ref fileSystem.Ref()));
+            MakeObject(context, new FileSystemProxy.IFileSystem(ref fileSystem.Ref));
 
             return ResultCode.Success;
         }
@@ -338,10 +353,10 @@ namespace Ryujinx.HLE.HOS.Services.Fs
             SaveDataAttribute attribute = context.RequestData.ReadStruct<SaveDataAttribute>();
             using var fileSystem = new SharedRef<IFileSystem>();
 
-            Result result = _baseFileSystemProxy.Get.OpenSaveDataFileSystemBySystemSaveDataId(ref fileSystem.Ref(), spaceId, in attribute);
+            Result result = _baseFileSystemProxy.Get.OpenSaveDataFileSystemBySystemSaveDataId(ref fileSystem.Ref, spaceId, in attribute);
             if (result.IsFailure()) return (ResultCode)result.Value;
 
-            MakeObject(context, new FileSystemProxy.IFileSystem(ref fileSystem.Ref()));
+            MakeObject(context, new FileSystemProxy.IFileSystem(ref fileSystem.Ref));
 
             return ResultCode.Success;
         }
@@ -354,10 +369,10 @@ namespace Ryujinx.HLE.HOS.Services.Fs
             SaveDataAttribute attribute = context.RequestData.ReadStruct<SaveDataAttribute>();
             using var fileSystem = new SharedRef<IFileSystem>();
 
-            Result result = _baseFileSystemProxy.Get.OpenReadOnlySaveDataFileSystem(ref fileSystem.Ref(), spaceId, in attribute);
+            Result result = _baseFileSystemProxy.Get.OpenReadOnlySaveDataFileSystem(ref fileSystem.Ref, spaceId, in attribute);
             if (result.IsFailure()) return (ResultCode)result.Value;
 
-            MakeObject(context, new FileSystemProxy.IFileSystem(ref fileSystem.Ref()));
+            MakeObject(context, new FileSystemProxy.IFileSystem(ref fileSystem.Ref));
 
             return ResultCode.Success;
         }
@@ -416,10 +431,10 @@ namespace Ryujinx.HLE.HOS.Services.Fs
         {
             using var infoReader = new SharedRef<LibHac.FsSrv.Sf.ISaveDataInfoReader>();
 
-            Result result = _baseFileSystemProxy.Get.OpenSaveDataInfoReader(ref infoReader.Ref());
+            Result result = _baseFileSystemProxy.Get.OpenSaveDataInfoReader(ref infoReader.Ref);
             if (result.IsFailure()) return (ResultCode)result.Value;
 
-            MakeObject(context, new ISaveDataInfoReader(ref infoReader.Ref()));
+            MakeObject(context, new ISaveDataInfoReader(ref infoReader.Ref));
 
             return ResultCode.Success;
         }
@@ -431,10 +446,10 @@ namespace Ryujinx.HLE.HOS.Services.Fs
             SaveDataSpaceId spaceId = (SaveDataSpaceId)context.RequestData.ReadByte();
             using var infoReader = new SharedRef<LibHac.FsSrv.Sf.ISaveDataInfoReader>();
 
-            Result result = _baseFileSystemProxy.Get.OpenSaveDataInfoReaderBySaveDataSpaceId(ref infoReader.Ref(), spaceId);
+            Result result = _baseFileSystemProxy.Get.OpenSaveDataInfoReaderBySaveDataSpaceId(ref infoReader.Ref, spaceId);
             if (result.IsFailure()) return (ResultCode)result.Value;
 
-            MakeObject(context, new ISaveDataInfoReader(ref infoReader.Ref()));
+            MakeObject(context, new ISaveDataInfoReader(ref infoReader.Ref));
 
             return ResultCode.Success;
         }
@@ -445,10 +460,10 @@ namespace Ryujinx.HLE.HOS.Services.Fs
         {
             using var infoReader = new SharedRef<LibHac.FsSrv.Sf.ISaveDataInfoReader>();
 
-            Result result = _baseFileSystemProxy.Get.OpenSaveDataInfoReaderOnlyCacheStorage(ref infoReader.Ref());
+            Result result = _baseFileSystemProxy.Get.OpenSaveDataInfoReaderOnlyCacheStorage(ref infoReader.Ref);
             if (result.IsFailure()) return (ResultCode)result.Value;
 
-            MakeObject(context, new ISaveDataInfoReader(ref infoReader.Ref()));
+            MakeObject(context, new ISaveDataInfoReader(ref infoReader.Ref));
 
             return ResultCode.Success;
         }
@@ -461,10 +476,10 @@ namespace Ryujinx.HLE.HOS.Services.Fs
             ulong saveDataId = context.RequestData.ReadUInt64();
             using var fileSystem = new SharedRef<IFileSystem>();
 
-            Result result = _baseFileSystemProxy.Get.OpenSaveDataInternalStorageFileSystem(ref fileSystem.Ref(), spaceId, saveDataId);
+            Result result = _baseFileSystemProxy.Get.OpenSaveDataInternalStorageFileSystem(ref fileSystem.Ref, spaceId, saveDataId);
             if (result.IsFailure()) return (ResultCode)result.Value;
 
-            MakeObject(context, new FileSystemProxy.IFileSystem(ref fileSystem.Ref()));
+            MakeObject(context, new FileSystemProxy.IFileSystem(ref fileSystem.Ref));
 
             return ResultCode.Success;
         }
@@ -500,16 +515,16 @@ namespace Ryujinx.HLE.HOS.Services.Fs
             SaveDataSpaceId spaceId = (SaveDataSpaceId)context.RequestData.ReadInt64();
             SaveDataFilter filter = context.RequestData.ReadStruct<SaveDataFilter>();
 
-            ulong bufferPosition = context.Request.ReceiveBuff[0].Position;
+            ulong bufferAddress = context.Request.ReceiveBuff[0].Position;
             ulong bufferLen = context.Request.ReceiveBuff[0].Size;
 
-            byte[] infoBuffer = new byte[bufferLen];
+            using (var region = context.Memory.GetWritableRegion(bufferAddress, (int)bufferLen, true))
+            {
+                Result result = _baseFileSystemProxy.Get.FindSaveDataWithFilter(out long count, new OutBuffer(region.Memory.Span), spaceId, in filter);
+                if (result.IsFailure()) return (ResultCode)result.Value;
 
-            Result result = _baseFileSystemProxy.Get.FindSaveDataWithFilter(out long count, new OutBuffer(infoBuffer), spaceId, in filter);
-            if (result.IsFailure()) return (ResultCode)result.Value;
-
-            context.Memory.Write(bufferPosition, infoBuffer);
-            context.ResponseData.Write(count);
+                context.ResponseData.Write(count);
+            }
 
             return ResultCode.Success;
         }
@@ -521,10 +536,10 @@ namespace Ryujinx.HLE.HOS.Services.Fs
             SaveDataFilter filter = context.RequestData.ReadStruct<SaveDataFilter>();
             using var infoReader = new SharedRef<LibHac.FsSrv.Sf.ISaveDataInfoReader>();
 
-            Result result = _baseFileSystemProxy.Get.OpenSaveDataInfoReaderWithFilter(ref infoReader.Ref(), spaceId, in filter);
+            Result result = _baseFileSystemProxy.Get.OpenSaveDataInfoReaderWithFilter(ref infoReader.Ref, spaceId, in filter);
             if (result.IsFailure()) return (ResultCode)result.Value;
 
-            MakeObject(context, new ISaveDataInfoReader(ref infoReader.Ref()));
+            MakeObject(context, new ISaveDataInfoReader(ref infoReader.Ref));
 
             return ResultCode.Success;
         }
@@ -589,10 +604,10 @@ namespace Ryujinx.HLE.HOS.Services.Fs
             SaveDataAttribute attribute = context.RequestData.ReadStruct<SaveDataAttribute>();
             using var file = new SharedRef<LibHac.FsSrv.Sf.IFile>();
 
-            Result result = _baseFileSystemProxy.Get.OpenSaveDataMetaFile(ref file.Ref(), spaceId, in attribute, metaType);
+            Result result = _baseFileSystemProxy.Get.OpenSaveDataMetaFile(ref file.Ref, spaceId, in attribute, metaType);
             if (result.IsFailure()) return (ResultCode)result.Value;
 
-            MakeObject(context, new IFile(ref file.Ref()));
+            MakeObject(context, new IFile(ref file.Ref));
 
             return ResultCode.Success;
         }
@@ -621,10 +636,10 @@ namespace Ryujinx.HLE.HOS.Services.Fs
             ImageDirectoryId directoryId = (ImageDirectoryId)context.RequestData.ReadInt32();
             using var fileSystem = new SharedRef<IFileSystem>();
 
-            Result result = _baseFileSystemProxy.Get.OpenImageDirectoryFileSystem(ref fileSystem.Ref(), directoryId);
+            Result result = _baseFileSystemProxy.Get.OpenImageDirectoryFileSystem(ref fileSystem.Ref, directoryId);
             if (result.IsFailure()) return (ResultCode)result.Value;
 
-            MakeObject(context, new FileSystemProxy.IFileSystem(ref fileSystem.Ref()));
+            MakeObject(context, new FileSystemProxy.IFileSystem(ref fileSystem.Ref));
 
             return ResultCode.Success;
         }
@@ -635,10 +650,10 @@ namespace Ryujinx.HLE.HOS.Services.Fs
             BaseFileSystemId fileSystemId = (BaseFileSystemId)context.RequestData.ReadInt32();
             using var fileSystem = new SharedRef<IFileSystem>();
 
-            Result result = _baseFileSystemProxy.Get.OpenBaseFileSystem(ref fileSystem.Ref(), fileSystemId);
+            Result result = _baseFileSystemProxy.Get.OpenBaseFileSystem(ref fileSystem.Ref, fileSystemId);
             if (result.IsFailure()) return (ResultCode)result.Value;
 
-            MakeObject(context, new FileSystemProxy.IFileSystem(ref fileSystem.Ref()));
+            MakeObject(context, new FileSystemProxy.IFileSystem(ref fileSystem.Ref));
 
             return ResultCode.Success;
         }
@@ -649,10 +664,10 @@ namespace Ryujinx.HLE.HOS.Services.Fs
             ContentStorageId contentStorageId = (ContentStorageId)context.RequestData.ReadInt32();
             using var fileSystem = new SharedRef<IFileSystem>();
 
-            Result result = _baseFileSystemProxy.Get.OpenContentStorageFileSystem(ref fileSystem.Ref(), contentStorageId);
+            Result result = _baseFileSystemProxy.Get.OpenContentStorageFileSystem(ref fileSystem.Ref, contentStorageId);
             if (result.IsFailure()) return (ResultCode)result.Value;
 
-            MakeObject(context, new FileSystemProxy.IFileSystem(ref fileSystem.Ref()));
+            MakeObject(context, new FileSystemProxy.IFileSystem(ref fileSystem.Ref));
 
             return ResultCode.Success;
         }
@@ -663,10 +678,10 @@ namespace Ryujinx.HLE.HOS.Services.Fs
             CloudBackupWorkStorageId storageId = (CloudBackupWorkStorageId)context.RequestData.ReadInt32();
             using var fileSystem = new SharedRef<IFileSystem>();
 
-            Result result = _baseFileSystemProxy.Get.OpenCloudBackupWorkStorageFileSystem(ref fileSystem.Ref(), storageId);
+            Result result = _baseFileSystemProxy.Get.OpenCloudBackupWorkStorageFileSystem(ref fileSystem.Ref, storageId);
             if (result.IsFailure()) return (ResultCode)result.Value;
 
-            MakeObject(context, new FileSystemProxy.IFileSystem(ref fileSystem.Ref()));
+            MakeObject(context, new FileSystemProxy.IFileSystem(ref fileSystem.Ref));
 
             return ResultCode.Success;
         }
@@ -677,10 +692,10 @@ namespace Ryujinx.HLE.HOS.Services.Fs
             CustomStorageId customStorageId = (CustomStorageId)context.RequestData.ReadInt32();
             using var fileSystem = new SharedRef<IFileSystem>();
 
-            Result result = _baseFileSystemProxy.Get.OpenCustomStorageFileSystem(ref fileSystem.Ref(), customStorageId);
+            Result result = _baseFileSystemProxy.Get.OpenCustomStorageFileSystem(ref fileSystem.Ref, customStorageId);
             if (result.IsFailure()) return (ResultCode)result.Value;
 
-            MakeObject(context, new FileSystemProxy.IFileSystem(ref fileSystem.Ref()));
+            MakeObject(context, new FileSystemProxy.IFileSystem(ref fileSystem.Ref));
 
             return ResultCode.Success;
         }
@@ -689,11 +704,11 @@ namespace Ryujinx.HLE.HOS.Services.Fs
         // OpenDataStorageByCurrentProcess() -> object<nn::fssrv::sf::IStorage> dataStorage
         public ResultCode OpenDataStorageByCurrentProcess(ServiceCtx context)
         {
-            var storage = context.Device.FileSystem.RomFs.AsStorage(true);
+            var storage = context.Device.FileSystem.GetRomFs(_pid).AsStorage(true);
             using var sharedStorage = new SharedRef<LibHac.Fs.IStorage>(storage);
-            using var sfStorage = new SharedRef<IStorage>(new StorageInterfaceAdapter(ref sharedStorage.Ref()));
+            using var sfStorage = new SharedRef<IStorage>(new StorageInterfaceAdapter(ref sharedStorage.Ref));
 
-            MakeObject(context, new FileSystemProxy.IStorage(ref sfStorage.Ref()));
+            MakeObject(context, new FileSystemProxy.IStorage(ref sfStorage.Ref));
 
             return ResultCode.Success;
         }
@@ -714,9 +729,9 @@ namespace Ryujinx.HLE.HOS.Services.Fs
 
                 var storage = context.Device.FileSystem.ModLoader.ApplyRomFsMods(titleId, aocStorage);
                 using var sharedStorage = new SharedRef<LibHac.Fs.IStorage>(storage);
-                using var sfStorage = new SharedRef<IStorage>(new StorageInterfaceAdapter(ref sharedStorage.Ref()));
+                using var sfStorage = new SharedRef<IStorage>(new StorageInterfaceAdapter(ref sharedStorage.Ref));
 
-                MakeObject(context, new FileSystemProxy.IStorage(ref sfStorage.Ref()));
+                MakeObject(context, new FileSystemProxy.IStorage(ref sfStorage.Ref));
 
                 return ResultCode.Success;
             }
@@ -749,9 +764,9 @@ namespace Ryujinx.HLE.HOS.Services.Fs
                             Nca nca = new Nca(context.Device.System.KeySet, ncaStorage);
                             LibHac.Fs.IStorage romfsStorage = nca.OpenStorage(NcaSectionType.Data, context.Device.System.FsIntegrityCheckLevel);
                             using var sharedStorage = new SharedRef<LibHac.Fs.IStorage>(romfsStorage);
-                            using var sfStorage = new SharedRef<IStorage>(new StorageInterfaceAdapter(ref sharedStorage.Ref()));
+                            using var sfStorage = new SharedRef<IStorage>(new StorageInterfaceAdapter(ref sharedStorage.Ref));
 
-                            MakeObject(context, new FileSystemProxy.IStorage(ref sfStorage.Ref()));
+                            MakeObject(context, new FileSystemProxy.IStorage(ref sfStorage.Ref));
                         }
                         catch (HorizonResultException ex)
                         {
@@ -778,11 +793,31 @@ namespace Ryujinx.HLE.HOS.Services.Fs
         // OpenPatchDataStorageByCurrentProcess() -> object<nn::fssrv::sf::IStorage>
         public ResultCode OpenPatchDataStorageByCurrentProcess(ServiceCtx context)
         {
-            var storage = context.Device.FileSystem.RomFs.AsStorage(true);
+            var storage = context.Device.FileSystem.GetRomFs(_pid).AsStorage(true);
             using var sharedStorage = new SharedRef<LibHac.Fs.IStorage>(storage);
-            using var sfStorage = new SharedRef<IStorage>(new StorageInterfaceAdapter(ref sharedStorage.Ref()));
+            using var sfStorage = new SharedRef<IStorage>(new StorageInterfaceAdapter(ref sharedStorage.Ref));
 
-            MakeObject(context, new FileSystemProxy.IStorage(ref sfStorage.Ref()));
+            MakeObject(context, new FileSystemProxy.IStorage(ref sfStorage.Ref));
+
+            return ResultCode.Success;
+        }
+
+        [CommandHipc(205)]
+        // OpenDataStorageWithProgramIndex(u8 program_index) -> object<nn::fssrv::sf::IStorage>
+        public ResultCode OpenDataStorageWithProgramIndex(ServiceCtx context)
+        {
+            byte programIndex = context.RequestData.ReadByte();
+
+            if ((context.Device.Application.TitleId & 0xf) != programIndex)
+            {
+                throw new NotImplementedException($"Accessing storage from other programs is not supported (program index = {programIndex}).");
+            }
+
+            var storage = context.Device.FileSystem.GetRomFs(_pid).AsStorage(true);
+            using var sharedStorage = new SharedRef<LibHac.Fs.IStorage>(storage);
+            using var sfStorage = new SharedRef<IStorage>(new StorageInterfaceAdapter(ref sharedStorage.Ref));
+
+            MakeObject(context, new FileSystemProxy.IStorage(ref sfStorage.Ref));
 
             return ResultCode.Success;
         }
@@ -793,10 +828,10 @@ namespace Ryujinx.HLE.HOS.Services.Fs
         {
             using var deviceOperator = new SharedRef<LibHac.FsSrv.Sf.IDeviceOperator>();
 
-            Result result = _baseFileSystemProxy.Get.OpenDeviceOperator(ref deviceOperator.Ref());
+            Result result = _baseFileSystemProxy.Get.OpenDeviceOperator(ref deviceOperator.Ref);
             if (result.IsFailure()) return (ResultCode)result.Value;
 
-            MakeObject(context, new IDeviceOperator(ref deviceOperator.Ref()));
+            MakeObject(context, new IDeviceOperator(ref deviceOperator.Ref));
 
             return ResultCode.Success;
         }
@@ -868,7 +903,7 @@ namespace Ryujinx.HLE.HOS.Services.Fs
         [CommandHipc(606)]
         public ResultCode GetRightsId(ServiceCtx context)
         {
-            LibHac.Ncm.StorageId storageId = (LibHac.Ncm.StorageId)context.RequestData.ReadInt64();
+            StorageId storageId = (StorageId)context.RequestData.ReadInt64();
             ProgramId programId = context.RequestData.ReadStruct<ProgramId>();
 
             Result result = _baseFileSystemProxy.Get.GetRightsId(out RightsId rightsId, programId, storageId);
@@ -1159,10 +1194,10 @@ namespace Ryujinx.HLE.HOS.Services.Fs
         {
             using var fileSystem = new SharedRef<IFileSystem>();
 
-            Result result = _baseFileSystemProxy.Get.OpenRegisteredUpdatePartition(ref fileSystem.Ref());
+            Result result = _baseFileSystemProxy.Get.OpenRegisteredUpdatePartition(ref fileSystem.Ref);
             if (result.IsFailure()) return (ResultCode)result.Value;
 
-            MakeObject(context, new FileSystemProxy.IFileSystem(ref fileSystem.Ref()));
+            MakeObject(context, new FileSystemProxy.IFileSystem(ref fileSystem.Ref));
 
             return ResultCode.Success;
         }
@@ -1254,10 +1289,10 @@ namespace Ryujinx.HLE.HOS.Services.Fs
         {
             using var commitManager = new SharedRef<LibHac.FsSrv.Sf.IMultiCommitManager>();
 
-            Result result = _baseFileSystemProxy.Get.OpenMultiCommitManager(ref commitManager.Ref());
+            Result result = _baseFileSystemProxy.Get.OpenMultiCommitManager(ref commitManager.Ref);
             if (result.IsFailure()) return (ResultCode)result.Value;
 
-            MakeObject(context, new IMultiCommitManager(ref commitManager.Ref()));
+            MakeObject(context, new IMultiCommitManager(ref commitManager.Ref));
 
             return ResultCode.Success;
         }

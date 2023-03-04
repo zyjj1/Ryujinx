@@ -229,14 +229,14 @@ namespace Ryujinx.Audio.Renderer.Server.MemoryPool
 
             if (AssignDspAddress(ref addressInfo))
             {
-                errorInfo.ErrorCode      = 0x0;
+                errorInfo.ErrorCode = 0x0;
                 errorInfo.ExtraErrorInfo = 0x0;
 
                 return true;
             }
             else
             {
-                errorInfo.ErrorCode      = ResultCode.InvalidAddressInfo;
+                errorInfo.ErrorCode = ResultCode.InvalidAddressInfo;
                 errorInfo.ExtraErrorInfo = addressInfo.CpuAddress;
 
                 return _isForceMapEnabled;
@@ -263,12 +263,12 @@ namespace Ryujinx.Audio.Renderer.Server.MemoryPool
                 return UpdateResult.Success;
             }
 
-            if (inParameter.CpuAddress == 0 || (inParameter.CpuAddress & (pageSize - 1)) != 0)
+            if (inParameter.CpuAddress == 0 || (inParameter.CpuAddress % pageSize) != 0)
             {
                 return UpdateResult.InvalidParameter;
             }
 
-            if (inParameter.Size == 0 || (inParameter.Size & (pageSize - 1)) != 0)
+            if (inParameter.Size == 0 || (inParameter.Size % pageSize) != 0)
             {
                 return UpdateResult.InvalidParameter;
             }

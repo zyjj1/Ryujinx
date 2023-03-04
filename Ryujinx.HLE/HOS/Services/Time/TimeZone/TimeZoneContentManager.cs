@@ -97,7 +97,7 @@ namespace Ryujinx.HLE.HOS.Services.Time.TimeZone
 
                     using var binaryListFile = new UniqueRef<IFile>();
 
-                    romfs.OpenFile(ref binaryListFile.Ref(), "/binaryList.txt".ToU8Span(), OpenMode.Read).ThrowIfFailure();
+                    romfs.OpenFile(ref binaryListFile.Ref, "/binaryList.txt".ToU8Span(), OpenMode.Read).ThrowIfFailure();
 
                     StreamReader reader = new StreamReader(binaryListFile.Get.AsStream());
 
@@ -130,7 +130,7 @@ namespace Ryujinx.HLE.HOS.Services.Time.TimeZone
             }
 
             List<(int Offset, string Location, string Abbr)> outList = new List<(int Offset, string Location, string Abbr)>();
-            var now = System.DateTimeOffset.Now.ToUnixTimeSeconds();
+            var now = DateTimeOffset.Now.ToUnixTimeSeconds();
             using (IStorage ncaStorage = new LocalStorage(_virtualFileSystem.SwitchPathToSystemPath(tzBinaryContentPath), FileAccess.Read, FileMode.Open))
             using (IFileSystem romfs = new Nca(_virtualFileSystem.KeySet, ncaStorage).OpenFileSystem(NcaSectionType.Data, _fsIntegrityCheckLevel))
             {
@@ -143,7 +143,7 @@ namespace Ryujinx.HLE.HOS.Services.Time.TimeZone
 
                     using var tzif = new UniqueRef<IFile>();
 
-                    if (romfs.OpenFile(ref tzif.Ref(), $"/zoneinfo/{locName}".ToU8Span(), OpenMode.Read).IsFailure())
+                    if (romfs.OpenFile(ref tzif.Ref, $"/zoneinfo/{locName}".ToU8Span(), OpenMode.Read).IsFailure())
                     {
                         Logger.Error?.Print(LogClass.ServiceTime, $"Error opening /zoneinfo/{locName}");
                         continue;
@@ -273,7 +273,7 @@ namespace Ryujinx.HLE.HOS.Services.Time.TimeZone
 
             using var timeZoneBinaryFile = new UniqueRef<IFile>();
 
-            Result result = romfs.OpenFile(ref timeZoneBinaryFile.Ref(), $"/zoneinfo/{locationName}".ToU8Span(), OpenMode.Read);
+            Result result = romfs.OpenFile(ref timeZoneBinaryFile.Ref, $"/zoneinfo/{locationName}".ToU8Span(), OpenMode.Read);
 
             timeZoneBinaryStream = timeZoneBinaryFile.Release().AsStream();
 

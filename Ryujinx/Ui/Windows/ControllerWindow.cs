@@ -2,11 +2,14 @@ using Gtk;
 using Ryujinx.Common.Configuration;
 using Ryujinx.Common.Configuration.Hid;
 using Ryujinx.Common.Configuration.Hid.Controller;
+using Ryujinx.Common.Configuration.Hid.Controller.Motion;
 using Ryujinx.Common.Configuration.Hid.Keyboard;
+using Ryujinx.Common.Logging;
 using Ryujinx.Common.Utilities;
-using Ryujinx.Ui.Common.Configuration;
 using Ryujinx.Input;
+using Ryujinx.Input.Assigner;
 using Ryujinx.Input.GTK3;
+using Ryujinx.Ui.Common.Configuration;
 using Ryujinx.Ui.Widgets;
 using System;
 using System.Collections.Generic;
@@ -14,15 +17,10 @@ using System.IO;
 using System.Reflection;
 using System.Text.Json;
 using System.Threading;
-
-using GUI = Gtk.Builder.ObjectAttribute;
-using Key = Ryujinx.Common.Configuration.Hid.Key;
-
 using ConfigGamepadInputId = Ryujinx.Common.Configuration.Hid.Controller.GamepadInputId;
 using ConfigStickInputId = Ryujinx.Common.Configuration.Hid.Controller.StickInputId;
-using Ryujinx.Common.Configuration.Hid.Controller.Motion;
-using Ryujinx.Common.Logging;
-using Ryujinx.Input.Assigner;
+using GUI = Gtk.Builder.ObjectAttribute;
+using Key = Ryujinx.Common.Configuration.Hid.Key;
 
 namespace Ryujinx.Ui.Windows
 {
@@ -119,7 +117,7 @@ namespace Ryujinx.Ui.Windows
 
         public ControllerWindow(MainWindow mainWindow, PlayerIndex controllerId) : this(mainWindow, new Builder("Ryujinx.Ui.Windows.ControllerWindow.glade"), controllerId) { }
 
-        private ControllerWindow(MainWindow mainWindow, Builder builder, PlayerIndex controllerId) : base(builder.GetObject("_controllerWin").Handle)
+        private ControllerWindow(MainWindow mainWindow, Builder builder, PlayerIndex controllerId) : base(builder.GetRawOwnedObject("_controllerWin"))
         {
             _mainWindow = mainWindow;
             _selectedGamepad = null;
@@ -246,7 +244,7 @@ namespace Ryujinx.Ui.Windows
 
             if (str.Length > MaxSize)
             {
-                return str.Substring(0, MaxSize - ShrinkChars.Length) + ShrinkChars;
+                return $"{str.AsSpan(0, MaxSize - ShrinkChars.Length)}{ShrinkChars}";
             }
 
             return str;
@@ -379,13 +377,16 @@ namespace Ryujinx.Ui.Windows
                     break;
             }
 
-            _controllerImage.Pixbuf = _controllerType.ActiveId switch
+            if (!OperatingSystem.IsMacOS())
             {
-                "ProController" => new Gdk.Pixbuf(Assembly.GetAssembly(typeof(ConfigurationState)), "Ryujinx.Ui.Common.Resources.Controller_ProCon.svg", 400, 400),
-                "JoyconLeft"    => new Gdk.Pixbuf(Assembly.GetAssembly(typeof(ConfigurationState)), "Ryujinx.Ui.Common.Resources.Controller_JoyConLeft.svg", 400, 500),
-                "JoyconRight"   => new Gdk.Pixbuf(Assembly.GetAssembly(typeof(ConfigurationState)), "Ryujinx.Ui.Common.Resources.Controller_JoyConRight.svg", 400, 500),
-                _               => new Gdk.Pixbuf(Assembly.GetAssembly(typeof(ConfigurationState)), "Ryujinx.Ui.Common.Resources.Controller_JoyConPair.svg", 400, 500),
-            };
+                _controllerImage.Pixbuf = _controllerType.ActiveId switch
+                {
+                    "ProController" => new Gdk.Pixbuf(Assembly.GetAssembly(typeof(ConfigurationState)), "Ryujinx.Ui.Common.Resources.Controller_ProCon.svg", 400, 400),
+                    "JoyconLeft"    => new Gdk.Pixbuf(Assembly.GetAssembly(typeof(ConfigurationState)), "Ryujinx.Ui.Common.Resources.Controller_JoyConLeft.svg", 400, 500),
+                    "JoyconRight"   => new Gdk.Pixbuf(Assembly.GetAssembly(typeof(ConfigurationState)), "Ryujinx.Ui.Common.Resources.Controller_JoyConRight.svg", 400, 500),
+                    _               => new Gdk.Pixbuf(Assembly.GetAssembly(typeof(ConfigurationState)), "Ryujinx.Ui.Common.Resources.Controller_JoyConPair.svg", 400, 500),
+                };
+            }
         }
 
         private void ClearValues()
